@@ -148,11 +148,17 @@ def private() -> Response:
     return HTMLResponse(
         ROUTES["/"],
         headers={
-            "X-Robots-Tag": "noindex",
+            "X-Robots-Tag": "noarchive",
             "Set-Cookie": "session=abc; Path=/",
             "Server-Timing": "app;dur=1",
         },
     )
+
+
+@app.get("/onboarding/")
+def onboarding() -> Response:
+    # A page that would take the full TIMEOUT_MS to give up on.
+    return HTMLResponse(ROUTES["/never/"], headers={"X-Robots-Tag": "noindex"})
 
 
 @app.get("/echo-headers/")

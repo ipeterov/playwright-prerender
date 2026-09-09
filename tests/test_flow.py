@@ -1,6 +1,7 @@
 """End to end against the stub app: every behaviour in the HTTP contract."""
 
 import asyncio
+import time
 
 import httpx
 import pytest
@@ -139,9 +140,21 @@ async def test_x_robots_tag_copied_from_origin(
 ):
     r = await client.get(f"{service}/private/")
     assert r.status_code == 200
-    assert r.headers["x-robots-tag"] == "noindex"
+    assert "Hello from home" in r.text  # rendered
+    assert r.headers["x-robots-tag"] == "noarchive"
     assert "set-cookie" not in r.headers
     assert "server-timing" not in r.headers
+
+
+async def test_noindex_pages_are_not_rendered(
+    service: str, client: httpx.AsyncClient
+):
+    started = time.monotonic()
+    r = await client.get(f"{service}/onboarding/")
+    assert time.monotonic() - started < 5  # not the 12s flag timeout
+    assert r.status_code == 200
+    assert r.headers["x-robots-tag"] == "noindex"
+    assert "Loading…" in r.text  # the shell, passed through
 
 
 async def test_asset_cache_serves_second_render_from_memory(

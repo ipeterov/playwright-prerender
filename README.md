@@ -106,11 +106,12 @@ state: if the browser is gone, the process has exited.
    service itself: the service's own user agent, the header
    `X-Prerender-Internal: 1`, a fresh cookie jar, redirects not followed,
    never the crawler's own cookies. If the response is anything other than
-   `200` with `text/html`, the navigation is abandoned and the response is
-   **passed through unchanged**: status, body, `Content-Type`, `Location`,
-   `X-Robots-Tag`, `Cache-Control`. This one rule makes `/robots.txt`,
-   `/sitemap.xml`, permanent redirects and real 404s correct with no path
-   list anywhere. Otherwise the browser is handed that same response and
+   `200` with `text/html`, or carries `X-Robots-Tag: noindex`, the
+   navigation is abandoned and the response is **passed through
+   unchanged**: status, body, `Content-Type`, `Location`, `X-Robots-Tag`,
+   `Cache-Control`. This one rule makes `/robots.txt`, `/sitemap.xml`,
+   permanent redirects and real 404s correct with no path list anywhere,
+   and spares the browser on pages no crawler will keep. Otherwise the browser is handed that same response and
    the render continues — the origin renders the page exactly once per
    request. (`HEAD` requests, and paths `PATH_ALLOW`/`PATH_DENY` exclude,
    skip the browser and are fetched and passed through directly.)

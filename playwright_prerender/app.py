@@ -29,6 +29,9 @@ from .logs import log_event
 from .render import RenderResult, RenderTimeout, render
 from .timing import OriginRequests, Timeline
 
+# `none` is shorthand for `noindex, nofollow`.
+_NOINDEX_RE = re.compile(r"\b(noindex|none)\b", re.IGNORECASE)
+
 
 @dataclass
 class OriginResponse:
@@ -45,8 +48,21 @@ class OriginResponse:
         )
 
     @property
+    def noindex(self) -> bool:
+        """The origin told crawlers not to index this. Rendering it would
+        only cost a browser session for a page no crawler will keep."""
+        tag = next(
+            (v for k, v in self.headers if k.lower() == "x-robots-tag"), ""
+        )
+        return bool(_NOINDEX_RE.search(tag))
+
+    @property
     def renderable(self) -> bool:
-        return self.status == 200 and is_html(self.content_type)
+        return (
+            self.status == 200
+            and is_html(self.content_type)
+            and not self.noindex
+        )
 
 
 @dataclass
@@ -383,6 +399,7 @@ async def handle_request(state: State, request: Request) -> Response:
             return finish(
                 passthrough(state, capture.response),
                 "passthrough",
+                **({"reason": "noindex"} if capture.response.noindex else {}),
                 **render_fields(),
             )
         if capture.error is not None:
