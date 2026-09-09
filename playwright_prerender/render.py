@@ -76,8 +76,11 @@ async def render(
     settings: Settings,
     url: str,
     requested_path: str,
+    viewport: tuple[int, int],
 ) -> RenderResult:
     deadline = _Deadline(settings.timeout_ms)
+    # Per render on the pooled page, so one pool serves both viewports.
+    await page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
     ready_expr = (
         f"() => window[{json.dumps(settings.ready_flag)}] !== undefined"
     )

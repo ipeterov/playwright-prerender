@@ -25,6 +25,9 @@ WAIT_FOR_MODES = ("flag", "networkidle", "load")  # plus "selector:<css>"
 ON_TIMEOUT_MODES = ("passthrough", "snapshot", "503")
 ENGINES = ("chromium", "webkit", "firefox")
 LOG_FORMATS = ("text", "json")
+# Googlebot Smartphone and bingbot's mobile variant both carry "Mobile".
+DEFAULT_MOBILE_UA_REGEX = r"\bMobile\b|Android|iPhone|iPad"
+_VIEWPORT_RE = re.compile(r"^(\d+)x(\d+)$")
 
 
 class ConfigError(ValueError):
@@ -52,6 +55,11 @@ class Settings:
     path_deny: str = ""
     browser_engine: str = "chromium"
     browser_args: tuple[str, ...] = ()
+    # Google renders desktop at 1024 wide and smartphone at 412 wide. Tall,
+    # so content gated behind "is it in view" checks still enters the DOM.
+    viewport: str = "1024x4096"
+    mobile_viewport: str = "412x4096"
+    mobile_ua_regex: str = DEFAULT_MOBILE_UA_REGEX
     sentry_dsn: str = ""
     release: str = ""
     log_format: str = "text"
@@ -78,7 +86,7 @@ class Settings:
             raise ConfigError(f"LOG_FORMAT must be one of {LOG_FORMATS}")
         if self.concurrency < 1:
             raise ConfigError("CONCURRENCY must be at least 1")
-        for name in ("path_allow", "path_deny"):
+        for name in ("path_allow", "path_deny", "mobile_ua_regex"):
             pattern = getattr(self, name)
             if pattern:
                 try:
@@ -87,6 +95,17 @@ class Settings:
                     raise ConfigError(
                         f"{name.upper()} is not a valid regex: {e}"
                     ) from e
+        for name in ("viewport", "mobile_viewport"):
+            if not _VIEWPORT_RE.match(getattr(self, name)):
+                raise ConfigError(
+                    f"{name.upper()} must look like WIDTHxHEIGHT, e.g. 1024x4096"
+                )
+
+    def viewport_for(self, user_agent: str) -> tuple[str, tuple[int, int]]:
+        """('mobile' | 'desktop', (width, height)) for a crawler's UA."""
+        if self.mobile_ua_regex and re.search(self.mobile_ua_regex, user_agent):
+            return "mobile", _parse_viewport(self.mobile_viewport)
+        return "desktop", _parse_viewport(self.viewport)
 
     @property
     def wait_selector(self) -> str | None:
@@ -101,6 +120,12 @@ class Settings:
             if out[key]:
                 out[key] = "***"
         return out
+
+
+def _parse_viewport(value: str) -> tuple[int, int]:
+    m = _VIEWPORT_RE.match(value)
+    assert m is not None  # validated in __post_init__
+    return int(m.group(1)), int(m.group(2))
 
 
 # (field, env var, help). Types come from the dataclass field annotations.
@@ -132,6 +157,13 @@ _OPTIONS: list[tuple[str, str, str]] = [
     ("path_deny", "PATH_DENY", "regex; matching paths are never rendered"),
     ("browser_engine", "BROWSER_ENGINE", "chromium / webkit / firefox"),
     ("browser_args", "BROWSER_ARGS", "extra launch args, space-separated"),
+    ("viewport", "VIEWPORT", "WIDTHxHEIGHT for desktop crawlers"),
+    ("mobile_viewport", "MOBILE_VIEWPORT", "WIDTHxHEIGHT for mobile crawlers"),
+    (
+        "mobile_ua_regex",
+        "MOBILE_UA_REGEX",
+        "crawler UAs matching this get MOBILE_VIEWPORT; empty disables",
+    ),
     ("sentry_dsn", "SENTRY_DSN", "optional Sentry DSN"),
     ("release", "RELEASE", "Sentry release string"),
     ("log_format", "LOG_FORMAT", "text / json"),

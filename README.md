@@ -136,6 +136,26 @@ boundary after the flag fired.
 
 Every failure logs, and reports to Sentry if configured.
 
+### Mobile and desktop
+
+Google indexes with its smartphone crawler and renders at 412 px wide; its
+desktop crawler renders at 1024 px. A responsive app whose JavaScript
+changes the DOM by breakpoint (a hamburger menu instead of a nav bar, a
+mobile-only layout) produces a different snapshot at each width, so the
+service picks the viewport from the crawler's own user agent: a match on
+`MOBILE_UA_REGEX` gets `MOBILE_VIEWPORT`, anything else gets `VIEWPORT`.
+That reproduces what each Googlebot would have seen running the JavaScript
+itself, which is the strongest position against being read as cloaking.
+
+Both defaults are tall so content that only mounts when scrolled into view
+still enters the DOM. Touch is not emulated in either mode, so a
+`(pointer: coarse)` media query reports desktop. The request log line shows
+which viewport a render got, e.g. `viewport=mobile:412x4096`.
+
+Content parity between the two is the app's job: Google asks that the
+mobile version carry the same primary content as desktop, and that is what
+it ranks on.
+
 ### Not done on purpose
 
 - **Images, fonts and media are not blocked.** Blocking them can trigger the
@@ -206,6 +226,9 @@ Every variable has a matching CLI flag (`--origin`, `--wait-for`, ...);
 | `PATH_ALLOW` / `PATH_DENY` | empty | regexes on the path, for proxies that can't express a path rule |
 | `BROWSER_ENGINE` | `chromium` | `chromium` / `webkit` / `firefox` |
 | `BROWSER_ARGS` | empty | extra launch args, space-separated |
+| `VIEWPORT` | `1024x4096` | viewport for desktop crawlers |
+| `MOBILE_VIEWPORT` | `412x4096` | viewport for mobile crawlers |
+| `MOBILE_UA_REGEX` | `\bMobile\b\|Android\|iPhone\|iPad` | crawler user agents matching this get `MOBILE_VIEWPORT`; empty disables |
 | `LOG_FORMAT` | `text` | `text` / `json` |
 | `SENTRY_DSN` | empty | optional |
 | `RELEASE` | image version | Sentry release string |
@@ -227,7 +250,7 @@ fixed it at similar speed and memory. If you see that, the switch is
 One line per request, to stdout:
 
 ```
-2026-09-09T10:14:02.311Z INFO request source=playwright-prerender path=/characters/42/ engine=chromium wait_for=flag outcome=rendered status=200 ms=214 asset_cache_hits=17 asset_cache_misses=0
+2026-09-09T10:14:02.311Z INFO request source=playwright-prerender path=/characters/42/ engine=chromium wait_for=flag viewport=mobile:412x4096 outcome=rendered status=200 ms=214 asset_cache_hits=17 asset_cache_misses=0
 ```
 
 `outcome` is one of `rendered`, `passthrough`, `timeout`, `queue_full`,

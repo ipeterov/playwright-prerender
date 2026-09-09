@@ -235,6 +235,10 @@ async def handle_request(state: State, request: Request) -> Response:
         return finish(passthrough(state, probe), "passthrough")
 
     fields["wait_for"] = settings.wait_for
+    kind, viewport = settings.viewport_for(
+        request.headers.get("user-agent", "")
+    )
+    fields["viewport"] = f"{kind}:{viewport[0]}x{viewport[1]}"
     try:
         await asyncio.wait_for(
             state.slots.acquire(), timeout=settings.queue_wait_ms / 1000
@@ -255,7 +259,7 @@ async def handle_request(state: State, request: Request) -> Response:
                     "**/*",
                     RouteHandler(state.asset_cache, state.blocked_hosts, stats),
                 )
-            result = await render(page, settings, url, requested)
+            result = await render(page, settings, url, requested, viewport)
         finally:
             await context.close()
     except RenderTimeout as e:

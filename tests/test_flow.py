@@ -139,6 +139,50 @@ async def test_asset_cache_serves_second_render_from_memory(
     assert health["asset_cache_bytes"] > 0
 
 
+GOOGLEBOT_SMARTPHONE = (
+    "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 "
+    "(compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+)
+GOOGLEBOT_DESKTOP = (
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Googlebot/2.1; "
+    "+http://www.google.com/bot.html) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+async def test_viewport_follows_the_crawler_user_agent(
+    service: str, client: httpx.AsyncClient
+):
+    desktop = await client.get(
+        f"{service}/responsive/", headers={"User-Agent": GOOGLEBOT_DESKTOP}
+    )
+    assert 'id="navbar"' in desktop.text
+    assert "<p>1024x4096</p>" in desktop.text
+
+    mobile = await client.get(
+        f"{service}/responsive/", headers={"User-Agent": GOOGLEBOT_SMARTPHONE}
+    )
+    assert 'id="hamburger"' in mobile.text
+    assert "<p>412x4096</p>" in mobile.text
+
+    # No user agent at all is a desktop client.
+    anon = await client.get(
+        f"{service}/responsive/", headers={"User-Agent": ""}
+    )
+    assert 'id="navbar"' in anon.text
+
+
+async def test_viewport_settings_override(
+    service_factory, client: httpx.AsyncClient
+):
+    svc = await service_factory(viewport="800x600", mobile_ua_regex="")
+    r = await client.get(
+        f"{svc}/responsive/", headers={"User-Agent": GOOGLEBOT_SMARTPHONE}
+    )
+    assert "<p>800x600</p>" in r.text
+    assert 'id="navbar"' in r.text
+
+
 # --- passthrough ----------------------------------------------------------
 
 

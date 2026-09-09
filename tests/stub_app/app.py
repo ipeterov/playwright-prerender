@@ -98,6 +98,13 @@ ROUTES: dict[str, str] = {
         "Query",
         "root.textContent = 'q=' + new URLSearchParams(location.search).get('q'); setReady(true);",
     ),
+    "/responsive/": page(
+        "Responsive",
+        """const mobile = window.matchMedia('(max-width: 600px)').matches;
+           root.innerHTML = mobile ? '<nav id="hamburger">menu</nav>' : '<nav id="navbar">Home Docs</nav>';
+           root.insertAdjacentHTML('beforeend', '<p>' + innerWidth + 'x' + innerHeight + '</p>');
+           setReady(true);""",
+    ),
     "/selector/": page(
         "Selector",
         "setTimeout(() => { root.innerHTML = '<main id=\"ready\">selector content</main>'; }, 50);",
