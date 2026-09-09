@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request, Response
 from .assets import AssetCache, RenderStats, RouteHandler
 from .browser import BrowserManager
 from .config import INTERNAL_HEADER, Settings
-from .html import filter_headers, is_html, strip_scripts
+from .html import filter_headers, is_html, strip_query_params, strip_scripts
 from .logs import log_event
 from .render import RenderResult, RenderTimeout, render
 
@@ -186,10 +186,13 @@ async def handle_request(state: State, request: Request) -> Response:
     settings = state.settings
     started = time.monotonic()
     path = request.url.path
-    requested = path + (f"?{request.url.query}" if request.url.query else "")
+    received = path + (f"?{request.url.query}" if request.url.query else "")
+    # What the origin sees, and what the browser navigates to: the URL as
+    # received minus any parameter a proxy rule uses to route here.
+    requested = strip_query_params(received, settings.strip_query_params)
     url = settings.origin + requested
     fields: dict[str, Any] = {
-        "path": requested,
+        "path": received,
         "engine": settings.browser_engine,
     }
 
@@ -211,6 +214,23 @@ async def handle_request(state: State, request: Request) -> Response:
         )
         return response
 
+    if INTERNAL_HEADER.lower() in request.headers:
+        # One of our own fetches came back to us: the proxy in front routes
+        # on something this service forwards. Answer without touching the
+        # origin, so a misconfigured rule costs one fast, visible error
+        # rather than a chain of renders each waiting on the next.
+        state.last_error = "loop"
+        return finish(
+            Response(
+                content=b"Loop detected: the proxy routed the renderer's own "
+                b"fetch back to it.\n",
+                status_code=508,
+                headers={"Content-Type": "text/plain"},
+            ),
+            "loop",
+            logging.ERROR,
+        )
+
     try:
         probe = await state.probe(request.method, url)
     except httpx.HTTPError as e:
@@ -228,7 +248,6 @@ async def handle_request(state: State, request: Request) -> Response:
         )
     if (
         request.method == "HEAD"
-        or INTERNAL_HEADER.lower() in request.headers
         or not probe.renderable
         or not state.path_permitted(path)
     ):

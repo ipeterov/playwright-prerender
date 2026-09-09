@@ -93,15 +93,20 @@ state: if the browser is gone, the process has exited.
 
 **Any other `GET` or `HEAD`, any path:**
 
-1. **Origin probe.** A plain HTTP fetch of `ORIGIN + path + query` with the
-   service's own user agent, the header `X-Prerender-Internal: 1`, a fresh
-   cookie jar, redirects not followed, and never the crawler's own cookies.
-   If the response is anything other than `200` with `text/html`, it is
-   **passed through unchanged**: status, body, `Content-Type`, `Location`,
-   `X-Robots-Tag`, `Cache-Control`. This one rule makes `/robots.txt`,
-   `/sitemap.xml`, permanent redirects and real 404s correct with no path
-   list anywhere. `HEAD` requests, and any request carrying
-   `X-Prerender-Internal`, stop here (loop guard).
+0. **Loop guard.** A request that carries `X-Prerender-Internal` is one of
+   the service's own fetches routed back to it by the proxy. It gets a
+   `508` at once, with no origin fetch, so a misconfigured rule costs one
+   fast, visible error rather than a chain of renders each waiting on the
+   next.
+1. **Origin probe.** A plain HTTP fetch of `ORIGIN + path + query` — minus
+   `STRIP_QUERY_PARAMS`, so a `?prerender=1` routing rule can't match it —
+   with the service's own user agent, the header `X-Prerender-Internal: 1`,
+   a fresh cookie jar, redirects not followed, and never the crawler's own
+   cookies. If the response is anything other than `200` with `text/html`,
+   it is **passed through unchanged**: status, body, `Content-Type`,
+   `Location`, `X-Robots-Tag`, `Cache-Control`. This one rule makes
+   `/robots.txt`, `/sitemap.xml`, permanent redirects and real 404s correct
+   with no path list anywhere. `HEAD` requests stop here.
 2. **Render.** Take one of `CONCURRENCY` slots (or wait `QUEUE_WAIT_MS`, then
    take the `ON_TIMEOUT` path). Open a fresh browser context from the warm
    pool. Navigate. Wait per `WAIT_FOR`. Then wait for **DOM quiet**: no
@@ -241,6 +246,7 @@ Every variable has a matching CLI flag (`--origin`, `--wait-for`, ...);
 | `BLOCKED_HOSTS` | empty | comma list of hosts to abort requests to, e.g. `client.crisp.chat` |
 | `DROP_HEADERS` | empty | extra passthrough headers to strip |
 | `PATH_ALLOW` / `PATH_DENY` | empty | regexes on the path, for proxies that can't express a path rule |
+| `STRIP_QUERY_PARAMS` | `prerender` | comma list of query parameters dropped before fetching the origin, so a proxy rule keyed on `?prerender=1` never matches the service's own fetches |
 | `BROWSER_ENGINE` | `chromium` | `chromium` / `webkit` / `firefox` |
 | `BROWSER_ARGS` | empty | extra launch args, space-separated |
 | `VIEWPORT` | `1024x4096` | viewport for desktop crawlers |

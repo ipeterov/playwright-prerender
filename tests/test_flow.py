@@ -102,7 +102,18 @@ async def test_query_string_reaches_the_page(
 ):
     r = await client.get(f"{service}/query/?q=hello")
     assert r.status_code == 200
-    assert "q=hello" in r.text
+    assert "search=?q=hello" in r.text
+
+
+async def test_routing_param_is_stripped_before_the_origin(
+    service: str, client: httpx.AsyncClient
+):
+    # A proxy rule keyed on ?prerender=1 must not see it on our own fetch,
+    # or it would route that fetch back here. The rest of the query stays.
+    r = await client.get(f"{service}/query/?prerender=1&q=hello")
+    assert r.status_code == 200
+    assert "search=?q=hello" in r.text
+    assert "prerender" not in r.text
 
 
 async def test_blocked_host_is_aborted(service: str, client: httpx.AsyncClient):
@@ -217,9 +228,13 @@ async def test_head_is_never_rendered(service: str, client: httpx.AsyncClient):
 async def test_internal_header_is_a_loop_guard(
     service: str, client: httpx.AsyncClient
 ):
+    # Our own fetch routed back to us: fail fast, and never ask the origin,
+    # which would be the next link in the chain.
+    before = dict(hits)
     r = await client.get(f"{service}/", headers={"X-Prerender-Internal": "1"})
-    assert r.status_code == 200
-    assert "Loading…" in r.text  # the raw shell, not a render
+    assert r.status_code == 508
+    assert "Loop" in r.text
+    assert hits == before
 
 
 async def test_probe_uses_own_ua_header_and_no_crawler_cookies(

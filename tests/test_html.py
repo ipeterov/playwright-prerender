@@ -4,6 +4,7 @@ from playwright_prerender.html import (
     is_html,
     meta_status,
     path_and_query,
+    strip_query_params,
     strip_scripts,
 )
 from playwright_prerender.render import resolve_status
@@ -84,6 +85,16 @@ def test_is_html():
 def test_path_and_query():
     assert path_and_query("http://x/a/b/?q=1") == "/a/b/?q=1"
     assert path_and_query("http://x/a/") == "/a/"
+
+
+def test_strip_query_params():
+    names = ("prerender",)
+    assert strip_query_params("/a/?prerender=1", names) == "/a/"
+    assert strip_query_params("/a/?prerender=1&q=x", names) == "/a/?q=x"
+    assert strip_query_params("/a/?q=x&prerender=1&r=y", names) == "/a/?q=x&r=y"
+    assert strip_query_params("/a/?q=x", names) == "/a/?q=x"
+    assert strip_query_params("/a/", names) == "/a/"
+    assert strip_query_params("/a/?prerender=1", ()) == "/a/?prerender=1"
 
 
 def test_resolve_status_flag_wins_then_meta_then_redirect_rule():

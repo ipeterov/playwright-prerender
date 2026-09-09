@@ -3,7 +3,7 @@ meta-tag status. No heavy imports so tests stay instant."""
 
 import re
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 _SCRIPT_RE = re.compile(
     r"<script\b(?P<attrs>[^>]*)>.*?</script\s*>", re.IGNORECASE | re.DOTALL
@@ -117,3 +117,21 @@ def is_html(content_type: str | None) -> bool:
 def path_and_query(url: str) -> str:
     parts = urlsplit(url)
     return parts.path + (f"?{parts.query}" if parts.query else "")
+
+
+def strip_query_params(path_and_query: str, names: tuple[str, ...]) -> str:
+    """`path_and_query` without the named query parameters.
+
+    The rest of the query string is kept in order; a query left empty is
+    dropped with its `?`. Used on everything the service fetches so a proxy
+    rule keyed on one of these parameters can't match the fetch and loop.
+    """
+    if not names or "?" not in path_and_query:
+        return path_and_query
+    path, _, query = path_and_query.partition("?")
+    kept = [
+        (k, v)
+        for k, v in parse_qsl(query, keep_blank_values=True)
+        if k not in names
+    ]
+    return path + (f"?{urlencode(kept)}" if kept else "")

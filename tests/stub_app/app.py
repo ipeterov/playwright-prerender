@@ -3,7 +3,8 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 app = FastAPI()
 
-# Request counters, so tests can prove the asset cache served a hit.
+# Request counters, so tests can prove the asset cache served a hit and
+# that the loop guard never asked the origin.
 hits: dict[str, int] = {}
 
 APP_JS = """
@@ -96,7 +97,7 @@ ROUTES: dict[str, str] = {
     ),
     "/query/": page(
         "Query",
-        "root.textContent = 'q=' + new URLSearchParams(location.search).get('q'); setReady(true);",
+        "root.textContent = 'search=' + location.search; setReady(true);",
     ),
     "/responsive/": page(
         "Responsive",
@@ -165,6 +166,7 @@ def echo_headers(request: Request) -> Response:
 @app.api_route("/{path:path}", methods=["GET", "HEAD"])
 def catch_all(path: str) -> Response:
     key = "/" + path
+    hits[key] = hits.get(key, 0) + 1
     if key in ROUTES:
         return HTMLResponse(ROUTES[key])
     return HTMLResponse("<h1>Real 404</h1>", status_code=404)

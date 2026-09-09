@@ -1,6 +1,6 @@
 [project]
 name = "playwright-prerender"
-version = "0.1.1"
+version = "0.1.2"
 description = "Self-hosted dynamic rendering for single-page apps: real HTML for crawlers, rendered by Playwright."
 readme = "README.md"
 license = "MIT"

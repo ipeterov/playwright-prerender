@@ -53,6 +53,11 @@ class Settings:
     drop_headers: tuple[str, ...] = ()
     path_allow: str = ""
     path_deny: str = ""
+    # Query parameters removed from the URL before it is fetched, so a proxy
+    # rule keyed on one of them (`?prerender=1` -> this service) can't match
+    # the service's own fetches and loop. Headers don't need this: the
+    # service never forwards the crawler's headers.
+    strip_query_params: tuple[str, ...] = ("prerender",)
     browser_engine: str = "chromium"
     browser_args: tuple[str, ...] = ()
     # Google renders desktop at 1024 wide and smartphone at 412 wide. Tall,
@@ -155,6 +160,11 @@ _OPTIONS: list[tuple[str, str, str]] = [
     ("drop_headers", "DROP_HEADERS", "extra passthrough headers to strip"),
     ("path_allow", "PATH_ALLOW", "regex; only matching paths are rendered"),
     ("path_deny", "PATH_DENY", "regex; matching paths are never rendered"),
+    (
+        "strip_query_params",
+        "STRIP_QUERY_PARAMS",
+        "comma list of query parameters dropped before fetching the origin",
+    ),
     ("browser_engine", "BROWSER_ENGINE", "chromium / webkit / firefox"),
     ("browser_args", "BROWSER_ARGS", "extra launch args, space-separated"),
     ("viewport", "VIEWPORT", "WIDTHxHEIGHT for desktop crawlers"),
