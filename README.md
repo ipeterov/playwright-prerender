@@ -7,14 +7,17 @@ until the page itself says it's ready, strips the scripts, and returns the
 rendered HTML with the status the page reported. The app never knows the
 service exists.
 
-Google calls this pattern "dynamic rendering" and, since 2022, "a
-workaround, not a recommended solution". Understood. It's for apps where
+Google calls this pattern [dynamic rendering][g-dynamic] and, since 2022,
+"a workaround, not a recommended solution". Understood. It's for apps where
 server-side rendering would mean restructuring the frontend.
 
-I built it because the off-the-shelf options are gone: Rendertron is
-archived, the open-source `prerender` server's repo is gone, and
-browserless is SSPL. The official Playwright image is current and
-multi-arch; this is a few hundred lines on top of it.
+I built it because the off-the-shelf options are gone: [Rendertron][rendertron]
+was archived in October 2022 and its README says it no longer ships a
+Dockerfile; the open-source [`prerender`][prerender-npm] server was last
+published in September 2024 and its GitHub repository is gone; and
+[browserless][browserless-license] is SSPL or commercial. The official
+[Playwright image][pw-docker] is current and published for amd64 and arm64;
+this is a few hundred lines on top of it.
 
 ```
 crawler ──► load balancer ──(User-Agent rule)──► playwright-prerender ──► app origin
@@ -58,7 +61,8 @@ crawlers". Accepted values:
 **First value wins.** The service installs a setter before any page script
 runs, so a page that reports 404 and then client-side-redirects to a listing
 (which reports 200) stays a 404. Without this, every dead URL becomes a
-"soft 404" of the listing page in Google's eyes.
+[soft 404][g-http] of the listing page in Google's eyes: a 200 whose
+content is an error page.
 
 **`window.__prerender = true`** (name configurable with `PRERENDER_FLAG`) is
 set by the service before the page runs. Use it to skip analytics, chat
@@ -138,22 +142,34 @@ Every failure logs, and reports to Sentry if configured.
 
 ### Mobile and desktop
 
-Google indexes with its smartphone crawler and renders at 412 px wide; its
-desktop crawler renders at 1024 px. A responsive app whose JavaScript
-changes the DOM by breakpoint (a hamburger menu instead of a nav bar, a
-mobile-only layout) produces a different snapshot at each width, so the
-service picks the viewport from the crawler's own user agent: a match on
-`MOBILE_UA_REGEX` gets `MOBILE_VIEWPORT`, anything else gets `VIEWPORT`.
-That reproduces what each Googlebot would have seen running the JavaScript
-itself, which is the strongest position against being read as cloaking.
+Google indexes and ranks with "the mobile version of a site's content,
+crawled with the smartphone agent" ([mobile-first indexing][g-mobile]).
+Its smartphone crawler renders at 412 px wide and its desktop crawler at
+1024 px (Google doesn't publish this; [Lumar measured it][lumar-viewport]).
+The two crawlers are told apart by their user agents: the smartphone one
+carries `Android` and `Mobile` ([Google's crawler list][g-crawlers]).
 
-Both defaults are tall so content that only mounts when scrolled into view
-still enters the DOM. Touch is not emulated in either mode, so a
-`(pointer: coarse)` media query reports desktop. The request log line shows
-which viewport a render got, e.g. `viewport=mobile:412x4096`.
+A responsive app whose JavaScript changes the DOM by breakpoint (a hamburger
+menu instead of a nav bar, a mobile-only layout) produces a different
+snapshot at each width, so the service picks the viewport from the
+crawler's own user agent: a match on `MOBILE_UA_REGEX` gets
+`MOBILE_VIEWPORT`, anything else gets `VIEWPORT`. That reproduces what each
+Googlebot would have seen running the JavaScript itself. Google says it
+"generally doesn't consider dynamic rendering as cloaking" as long as it
+"produces similar content" ([dynamic rendering][g-dynamic]), and matching
+the crawler's own viewport is the most literal way to stay on that side.
 
-Content parity between the two is the app's job: Google asks that the
-mobile version carry the same primary content as desktop, and that is what
+Both defaults are tall because "Google Search does not interact with your
+page": it never scrolls ([lazy loading][g-lazy]). Content that only mounts
+once its element is in view, via `IntersectionObserver` or similar, enters
+the DOM within a 4096 px viewport and would not within a 915 px one. Touch
+is not emulated in either mode, so a `(pointer: coarse)` media query reports
+desktop. The request log line shows which viewport a render got, e.g.
+`viewport=mobile:412x4096`.
+
+Content parity between the two is the app's job. Google asks that you
+"make sure that your mobile site contains the same content as your desktop
+site" ([mobile-first indexing][g-mobile]), and the mobile content is what
 it ranks on.
 
 ### Not done on purpose
@@ -191,9 +207,10 @@ relaunch-after-N-renders, no idle close, no lazy launch. Memory growth is
 the container memory limit's problem. Two consequences:
 
 - With one replica, a restart means no healthy target for the 30 to 60
-  seconds a new task takes; crawlers get 503 meanwhile. Google treats 503
-  as temporary and retries. If it happens often enough to matter, run two
-  replicas.
+  seconds a new task takes; crawlers get 503 meanwhile. For Google, "5xx
+  and 429 server errors prompt Google's crawlers to temporarily slow down
+  with crawling" ([HTTP status codes][g-http]); it comes back. If it
+  happens often enough to matter, run two replicas.
 - A bad `BROWSER_ARGS` shows up as a crash loop at startup, not at first
   request.
 
@@ -238,11 +255,14 @@ Every variable has a matching CLI flag (`--origin`, `--wait-for`, ...);
 Fixed Chromium launch args: `--no-sandbox --disable-dev-shm-usage
 --disable-gpu`. Container runtimes have a tiny `/dev/shm` and run as root.
 
-**Engine note.** Chromium is the default for parity with Googlebot. In
-another production deployment of this pattern, Chromium's DevTools protocol
-deadlocked in `Target.createTarget` about 29 times a day across three
-Chromium versions; WebKit, which Playwright drives over its own protocol,
-fixed it at similar speed and memory. If you see that, the switch is
+**Engine note.** Chromium is the default for parity with Googlebot, which
+renders with "a headless Chromium" ([JavaScript SEO basics][g-js]). But in
+[another production deployment of this pattern][ngamesfr], "Chrome's
+browser process intermittently deadlocks inside `Target.createTarget`,
+blocked writing to a renderer, and never recovers. It restarted production
+pods roughly 29 times a day." They switched to WebKit, which Playwright
+drives over its own protocol rather than the Chrome DevTools Protocol, and
+the problem went away. If you see that, the switch is
 `BROWSER_ENGINE=webkit`.
 
 ## Logging
@@ -264,18 +284,22 @@ POSTed to the Log API, fire-and-forget, off the request path.
 
 **Which crawlers.** Search engines: `Googlebot`, `bingbot`, `DuckDuckBot`,
 `Applebot`, `YandexBot`. Social unfurlers (Slack, Discord, Twitter,
-Facebook) only read `<head>`, which any server already renders, so routing
-them here is pure load. SEO tools (Ahrefs, Semrush) crawl entire sites and
-will queue. AI crawlers: your call. Never match a bare `bot`: it would catch
-the service's own user agent.
+Facebook) read the [Open Graph][ogp] meta tags in `<head>`, which any
+server already renders, so routing them here is pure load. SEO tools
+(Ahrefs, Semrush) crawl entire sites and will queue. AI crawlers: your
+call. Never match a bare `bot`: it would catch the service's own user
+agent, `PlaywrightPrerender/…`.
 
 **AWS ALB.** A listener rule above the default: `host-header <site>` +
 `http-request-method GET,HEAD` + `http-header User-Agent` with the values
-above (at most 128 chars per value, literal casing as the crawlers send it)
-→ the service's target group. Health check `/health/`; deregistration delay
-longer than `TIMEOUT_MS`. Add a debug rule, `http-header X-Prerender: 1` or
-`query-string prerender=1` → the service, so `https://site/page/?prerender=1`
-in a normal browser shows the snapshot.
+above → the service's target group. [Header conditions][alb-conditions]
+are case-insensitive, allow up to three strings per condition and five per
+rule, and accept `*` wildcards (five per rule) or a regex, so
+`*Googlebot*` or `Googlebot|bingbot|DuckDuckBot|Applebot|YandexBot` both
+work. AWS itself recommends routing GET and HEAD the same way. Health check
+`/health/`; deregistration delay longer than `TIMEOUT_MS`. Add a debug rule,
+`http-header X-Prerender: 1` or `query-string prerender=1` → the service, so
+`https://site/page/?prerender=1` in a normal browser shows the snapshot.
 
 **nginx.**
 
@@ -327,3 +351,18 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for tests and releases.
 ## License
 
 MIT.
+
+[g-dynamic]: https://developers.google.com/search/docs/crawling-indexing/javascript/dynamic-rendering
+[g-mobile]: https://developers.google.com/search/docs/crawling-indexing/mobile/mobile-sites-mobile-first-indexing
+[g-crawlers]: https://developers.google.com/search/docs/crawling-indexing/google-common-crawlers
+[g-http]: https://developers.google.com/search/docs/crawling-indexing/http-network-errors
+[g-lazy]: https://developers.google.com/search/docs/crawling-indexing/javascript/lazy-loading
+[g-js]: https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics
+[lumar-viewport]: https://www.lumar.io/product-guides/new-releases/mobile-viewport/
+[rendertron]: https://github.com/GoogleChrome/rendertron
+[prerender-npm]: https://www.npmjs.com/package/prerender
+[browserless-license]: https://github.com/browserless/browserless/blob/main/LICENSE
+[pw-docker]: https://playwright.dev/python/docs/docker
+[ngamesfr]: https://github.com/ngamesfr/playwright-prerender
+[ogp]: https://ogp.me/
+[alb-conditions]: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/rule-condition-types.html#http-header-conditions
