@@ -228,13 +228,14 @@ async def test_queue_full_takes_the_on_timeout_path(
     svc = await service_factory(
         concurrency=1, queue_wait_ms=200, timeout_ms=5000, on_timeout="503"
     )
-    slow, second = await asyncio.gather(
-        client.get(f"{svc}/slow/"),
-        client.get(f"{svc}/"),
+    # Arrival order over two connections isn't defined, so assert the
+    # property: exactly one renders, the other is rejected while it waits.
+    first, second = await asyncio.gather(
+        client.get(f"{svc}/slow/"), client.get(f"{svc}/slow/")
     )
-    assert slow.status_code == 200
-    assert "Slow content" in slow.text
-    assert second.status_code == 503
+    assert sorted([first.status_code, second.status_code]) == [200, 503]
+    rendered = first if first.status_code == 200 else second
+    assert "Slow content" in rendered.text
 
 
 # --- other wait modes and path rules -------------------------------------
