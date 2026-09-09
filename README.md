@@ -98,18 +98,23 @@ state: if the browser is gone, the process has exited.
    `508` at once, with no origin fetch, so a misconfigured rule costs one
    fast, visible error rather than a chain of renders each waiting on the
    next.
-1. **Origin probe.** A plain HTTP fetch of `ORIGIN + path + query` — minus
-   `STRIP_QUERY_PARAMS`, so a `?prerender=1` routing rule can't match it —
-   with the service's own user agent, the header `X-Prerender-Internal: 1`,
-   a fresh cookie jar, redirects not followed, and never the crawler's own
-   cookies. If the response is anything other than `200` with `text/html`,
-   it is **passed through unchanged**: status, body, `Content-Type`,
-   `Location`, `X-Robots-Tag`, `Cache-Control`. This one rule makes
-   `/robots.txt`, `/sitemap.xml`, permanent redirects and real 404s correct
-   with no path list anywhere. `HEAD` requests stop here.
-2. **Render.** Take one of `CONCURRENCY` slots (or wait `QUEUE_WAIT_MS`, then
-   take the `ON_TIMEOUT` path). Open a fresh browser context from the warm
-   pool. Navigate. Wait per `WAIT_FOR`. Then wait for **DOM quiet**: no
+1. **One fetch of the origin.** Take one of `CONCURRENCY` slots (or wait
+   `QUEUE_WAIT_MS`, then take the `ON_TIMEOUT` path), open a fresh browser
+   context from the warm pool, and navigate to `ORIGIN + path + query` —
+   minus `STRIP_QUERY_PARAMS`, so a `?prerender=1` routing rule can't match
+   it. The browser's document request is intercepted and performed by the
+   service itself: the service's own user agent, the header
+   `X-Prerender-Internal: 1`, a fresh cookie jar, redirects not followed,
+   never the crawler's own cookies. If the response is anything other than
+   `200` with `text/html`, the navigation is abandoned and the response is
+   **passed through unchanged**: status, body, `Content-Type`, `Location`,
+   `X-Robots-Tag`, `Cache-Control`. This one rule makes `/robots.txt`,
+   `/sitemap.xml`, permanent redirects and real 404s correct with no path
+   list anywhere. Otherwise the browser is handed that same response and
+   the render continues — the origin renders the page exactly once per
+   request. (`HEAD` requests, and paths `PATH_ALLOW`/`PATH_DENY` exclude,
+   skip the browser and are fetched and passed through directly.)
+2. **Render.** Wait per `WAIT_FOR`. Then wait for **DOM quiet**: no
    mutations for `SETTLE_QUIET_MS`, capped at `SETTLE_MAX_MS`. All of it
    inside `TIMEOUT_MS`.
 3. **Status.** From the flag (or the meta tags). If the flag says 200 but the
@@ -119,8 +124,8 @@ state: if the browser is gone, the process has exited.
    tags except `application/ld+json`, `<link rel="modulepreload">`, and
    `<link rel="preload" as="script">`. Keep `<style>`, stylesheet, font and
    image links, so the snapshot still lays out when Google's Rich Results
-   Test screenshots it. Copy `X-Robots-Tag` from the probe. Return
-   `text/html; charset=utf-8`.
+   Test screenshots it. Copy `X-Robots-Tag` from the origin's response.
+   Return `text/html; charset=utf-8`.
 
 ### `WAIT_FOR`: what "the page is done" means
 
@@ -136,9 +141,11 @@ boundary after the flag fired.
 
 ### `ON_TIMEOUT`: what to serve when it doesn't happen
 
-- `passthrough` (default): the origin probe's body, i.e. the app's ordinary
-  shell, exactly what the crawler got before this service existed. A
-  renderer problem can never make things worse than not having one.
+- `passthrough` (default): the origin's own response, i.e. the app's
+  ordinary shell, exactly what the crawler got before this service existed.
+  A renderer problem can never make things worse than not having one. (If
+  the origin never answered at all, there is nothing to pass through and
+  the crawler gets a `502`.)
 - `snapshot`: whatever rendered so far. Sensible with `WAIT_FOR=networkidle`
   on apps that have no flag.
 - `503`: for setups that prefer the crawler to retry.
@@ -276,11 +283,27 @@ the problem went away. If you see that, the switch is
 One line per request, to stdout:
 
 ```
-2026-09-09T10:14:02.311Z INFO request source=playwright-prerender path=/characters/42/ engine=chromium wait_for=flag viewport=mobile:412x4096 outcome=rendered status=200 ms=214 asset_cache_hits=17 asset_cache_misses=0
+2026-09-09T10:14:02.311Z INFO request source=playwright-prerender path=/characters/42/ engine=chromium wait_for=flag viewport=mobile:412x4096 outcome=rendered status=200 queue_ms=0 context_ms=1 origin_ms=140 boot_ms=610 settle_ms=0 extract_ms=9 post_ms=2 total_ms=762 html_bytes=81204 asset_cache_hits=17 asset_cache_misses=0 api_requests=3 api_total_ms=310 api_max_ms=180
 ```
 
 `outcome` is one of `rendered`, `passthrough`, `timeout`, `queue_full`,
-`error`. `LOG_FORMAT=json` emits the same fields as one JSON object per
+`loop`, `error`. The `*_ms` fields are the phases of the request in order,
+each millisecond attributed to exactly one, so they sum to `total_ms`:
+
+| field | from → to |
+|---|---|
+| `queue_ms` | request received → concurrency slot acquired |
+| `context_ms` | slot → browser context taken from the warm pool |
+| `origin_ms` | navigation start → the origin's document response received (its time to last byte, as the browser sees it) |
+| `boot_ms` | document received → the ready flag raised (bundle parse, the app's own API calls, rendering) |
+| `settle_ms` | flag → DOM quiet |
+| `extract_ms` | reading the flag and serialising the DOM |
+| `post_ms` | script stripping and building the response |
+
+`api_requests`, `api_total_ms` and `api_max_ms` count the `fetch`/XHR
+requests the page made back to the origin while booting, so a slow
+`boot_ms` can be split into "waiting on the API" and "running JavaScript".
+`html_bytes` is the snapshot size. `LOG_FORMAT=json` emits the same fields as one JSON object per
 line, which CloudWatch, Datadog, Loki and the New Relic agent all parse into
 attributes without configuration. Startup logs the resolved config with
 secrets masked. With `NEW_RELIC_LICENSE_KEY` set, every record is also

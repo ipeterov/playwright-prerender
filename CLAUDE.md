@@ -16,10 +16,14 @@ they don't get re-litigated by accident.
 - **First-value-wins status.** The ready flag is a setter installed before
   any page script runs. A 404 that then client-side-redirects to a listing
   stays a 404, otherwise every dead URL becomes a soft 404.
-- **The origin probe decides what is renderable.** Only `200 text/html` is
-  rendered; everything else passes through with its status and the small
-  allowlist of headers. No path lists. `PATH_ALLOW`/`PATH_DENY` exist only
-  for proxies that can't express a path rule.
+- **The origin's response decides what is renderable, and it is fetched
+  once.** The browser's document request is intercepted and performed by
+  the service; only `200 text/html` is rendered, everything else passes
+  through with its status and the small allowlist of headers. No path
+  lists. `PATH_ALLOW`/`PATH_DENY` exist only for proxies that can't express
+  a path rule. There used to be a separate HTTP probe before the browser
+  navigated, which made the origin render every page twice; don't bring it
+  back.
 - **Own user agent and `X-Prerender-Internal`, both**, for loop safety. The
   service fetches the app through the same public origin a browser uses.
 - **`ORIGIN` is explicit**, never derived from the request `Host`. Deriving

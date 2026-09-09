@@ -10,6 +10,7 @@ every time. The same handler aborts requests to BLOCKED_HOSTS.
 import re
 import time
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -98,10 +99,15 @@ class AssetCache:
 
 @dataclass
 class RouteHandler:
-    """Bound to one render: aborts blocked hosts, serves and fills the cache."""
+    """Bound to one render: hands the document request to `document`, aborts
+    blocked hosts, serves and fills the cache for everything else."""
 
     cache: AssetCache | None
     blocked_hosts: frozenset[str]
+    # Called for the page's own navigation requests (the HTML document). It
+    # owns the origin fetch, so the render's one document fetch is also the
+    # one that decides whether there's anything to render.
+    document: Callable[[Any], Awaitable[None]] | None = None
     stats: RenderStats = field(default_factory=RenderStats)
 
     async def __call__(self, route: Any) -> None:
@@ -114,6 +120,13 @@ class RouteHandler:
 
     async def _handle(self, route: Any) -> None:
         request = route.request
+        if (
+            self.document is not None
+            and request.resource_type == "document"
+            and request.is_navigation_request()
+        ):
+            await self.document(route)
+            return
         if urlsplit(request.url).hostname in self.blocked_hosts:
             await route.abort()
             return

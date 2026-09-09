@@ -13,6 +13,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from .browser import MUTATION_KEY
 from .config import Settings
 from .html import MetaStatus, meta_status, path_and_query
+from .timing import Timeline
 
 ALLOWED_STATUSES = frozenset({200, 404, 410, 301})
 
@@ -77,6 +78,8 @@ async def render(
     url: str,
     requested_path: str,
     viewport: tuple[int, int],
+    *,
+    timeline: Timeline,
 ) -> RenderResult:
     deadline = _Deadline(settings.timeout_ms)
     # Per render on the pooled page, so one pool serves both viewports.
@@ -113,13 +116,16 @@ async def render(
             f"{settings.wait_for} not satisfied within {settings.timeout_ms}ms",
             partial,
         ) from e
+    timeline.mark("flag")
 
     await settle(page, settings, deadline)
+    timeline.mark("settled")
 
     flag_value = await page.evaluate(
         f"() => window[{json.dumps(settings.ready_flag)}]"
     )
     html = await page.content()
+    timeline.mark("extracted")
     final_path = path_and_query(page.url)
     status, location = resolve_status(
         flag_value, meta_status(html), requested_path, final_path

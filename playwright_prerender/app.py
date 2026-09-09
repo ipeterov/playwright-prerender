@@ -1,17 +1,25 @@
-"""FastAPI routes and the request flow: probe the origin, pass through
-anything that isn't a 200 HTML document, otherwise render it."""
+"""FastAPI routes and the request flow.
+
+One fetch of the origin per request. The browser's own document request is
+intercepted and performed by us: the response decides whether there is
+anything to render (a 200 HTML page) or whether it goes straight back to the
+crawler unchanged (robots.txt, sitemaps, redirects, real 404s). Either way
+the origin renders the page once.
+"""
 
 import asyncio
 import logging
 import re
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import sentry_sdk
 from fastapi import FastAPI, Request, Response
+from playwright.async_api import Error as PlaywrightError
 
 from .assets import AssetCache, RenderStats, RouteHandler
 from .browser import BrowserManager
@@ -19,10 +27,13 @@ from .config import INTERNAL_HEADER, Settings
 from .html import filter_headers, is_html, strip_query_params, strip_scripts
 from .logs import log_event
 from .render import RenderResult, RenderTimeout, render
+from .timing import OriginRequests, Timeline
 
 
 @dataclass
-class Probe:
+class OriginResponse:
+    """What the origin said for the requested URL, however we fetched it."""
+
     status: int
     headers: list[tuple[str, str]]
     body: bytes
@@ -38,6 +49,17 @@ class Probe:
         return self.status == 200 and is_html(self.content_type)
 
 
+@dataclass
+class DocumentCapture:
+    """Filled in by the document route handler during a render."""
+
+    response: OriginResponse | None = None
+    error: str | None = None
+    # The document request we answered; later navigations (a client-side
+    # redirect that reloads) fetch normally and are not captured.
+    seen: int = field(default=0)
+
+
 class State:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -48,6 +70,7 @@ class State:
             else None
         )
         self.blocked_hosts = frozenset(settings.blocked_hosts)
+        self.origin_host = urlsplit(settings.origin).hostname or ""
         self.slots = asyncio.Semaphore(settings.concurrency)
         self.transport = httpx.AsyncHTTPTransport(retries=0)
         self.started_at = time.monotonic()
@@ -68,7 +91,9 @@ class State:
             return False
         return True
 
-    async def probe(self, method: str, url: str) -> Probe:
+    async def fetch_origin(self, method: str, url: str) -> OriginResponse:
+        """A plain HTTP fetch, for the requests that never involve a browser:
+        HEAD, and paths the rules exclude from rendering."""
         # A new client per request means a fresh cookie jar; the shared
         # transport keeps the connection pool.
         async with httpx.AsyncClient(
@@ -87,7 +112,7 @@ class State:
                 # under us. GET/HEAD are idempotent: one retry on a fresh
                 # connection, then give up.
                 response = await client.request(method, url)
-        return Probe(
+        return OriginResponse(
             status=response.status_code,
             headers=list(response.headers.items()),
             body=response.content,
@@ -136,21 +161,27 @@ def create_app(settings: Settings) -> FastAPI:
     return app
 
 
-def passthrough(
-    state: State, probe: Probe, status: int | None = None
-) -> Response:
-    headers = dict(filter_headers(probe.headers, state.settings.drop_headers))
+def passthrough(state: State, origin: OriginResponse) -> Response:
+    headers = dict(filter_headers(origin.headers, state.settings.drop_headers))
     return Response(
-        content=probe.body, status_code=status or probe.status, headers=headers
+        content=origin.body, status_code=origin.status, headers=headers
+    )
+
+
+def origin_unreachable(detail: str) -> Response:
+    return Response(
+        content=f"Origin unreachable: {detail}\n".encode(),
+        status_code=502,
+        headers={"Content-Type": "text/plain"},
     )
 
 
 def rendered_response(
-    state: State, probe: Probe, result: RenderResult
+    state: State, origin: OriginResponse, result: RenderResult
 ) -> Response:
     headers = {"Content-Type": "text/html; charset=utf-8"}
     robots = next(
-        (v for k, v in probe.headers if k.lower() == "x-robots-tag"), None
+        (v for k, v in origin.headers if k.lower() == "x-robots-tag"), None
     )
     if robots:
         headers["X-Robots-Tag"] = robots
@@ -164,7 +195,10 @@ def rendered_response(
     )
 
 
-def fallback(state: State, probe: Probe, partial_html: str | None) -> Response:
+def fallback(
+    state: State, origin: OriginResponse | None, partial_html: str | None
+) -> Response:
+    """What to serve when the render didn't happen, per ON_TIMEOUT."""
     mode = state.settings.on_timeout
     if mode == "503":
         return Response(
@@ -179,12 +213,15 @@ def fallback(state: State, probe: Probe, partial_html: str | None) -> Response:
             status_code=200,
             headers=headers,
         )
-    return passthrough(state, probe)
+    if origin is None:
+        # The document never arrived, so there is no shell to fall back to.
+        return origin_unreachable("no response before the timeout")
+    return passthrough(state, origin)
 
 
 async def handle_request(state: State, request: Request) -> Response:
     settings = state.settings
-    started = time.monotonic()
+    timeline = Timeline()
     path = request.url.path
     received = path + (f"?{request.url.query}" if request.url.query else "")
     # What the origin sees, and what the browser navigates to: the URL as
@@ -202,14 +239,14 @@ async def handle_request(state: State, request: Request) -> Response:
         level: int = logging.INFO,
         **extra: Any,
     ) -> Response:
-        ms = int((time.monotonic() - started) * 1000)
+        timeline.mark("done")
         log_event(
             level,
             "request",
             **fields,
             outcome=outcome,
             status=response.status_code,
-            ms=ms,
+            **timeline.fields(),
             **extra,
         )
         return response
@@ -231,27 +268,19 @@ async def handle_request(state: State, request: Request) -> Response:
             logging.ERROR,
         )
 
-    try:
-        probe = await state.probe(request.method, url)
-    except httpx.HTTPError as e:
-        # No origin response at all, so nothing to pass through.
-        state.last_error = f"probe: {e!r}"
-        return finish(
-            Response(
-                content=b"Origin unreachable.\n",
-                status_code=502,
-                headers={"Content-Type": "text/plain"},
-            ),
-            "error",
-            logging.ERROR,
-            error=f"probe: {e!r}",
-        )
-    if (
-        request.method == "HEAD"
-        or not probe.renderable
-        or not state.path_permitted(path)
-    ):
-        return finish(passthrough(state, probe), "passthrough")
+    if request.method == "HEAD" or not state.path_permitted(path):
+        # No browser involved: a plain fetch, passed through.
+        try:
+            origin = await state.fetch_origin(request.method, url)
+        except httpx.HTTPError as e:
+            state.last_error = f"origin: {e!r}"
+            return finish(
+                origin_unreachable(repr(e)),
+                "error",
+                logging.ERROR,
+                error=f"origin: {e!r}",
+            )
+        return finish(passthrough(state, origin), "passthrough")
 
     fields["wait_for"] = settings.wait_for
     kind, viewport = settings.viewport_for(
@@ -265,51 +294,124 @@ async def handle_request(state: State, request: Request) -> Response:
     except TimeoutError:
         state.last_error = "queue_full"
         return finish(
-            fallback(state, probe, None), "queue_full", logging.WARNING
+            fallback(state, None, None), "queue_full", logging.WARNING
         )
+    timeline.mark("slot")
 
     state.in_flight += 1
     stats = RenderStats()
+    capture = DocumentCapture()
+    api = OriginRequests(state.origin_host)
+
+    async def document(route: Any) -> None:
+        """The browser's document request: fetch it ourselves, once, with
+        redirects left unfollowed so the crawler sees them. A response that
+        isn't a 200 HTML page is kept for passthrough and the navigation is
+        aborted; a page is handed to the browser to render."""
+        capture.seen += 1
+        if capture.seen > 1:
+            # A reload the page itself asked for. Not ours to judge.
+            await route.continue_()
+            return
+        try:
+            response = await route.fetch(max_redirects=0)
+            body = await response.body()
+        except PlaywrightError as e:
+            capture.error = repr(e)
+            await route.abort()
+            return
+        capture.response = OriginResponse(
+            status=response.status,
+            headers=list(response.headers.items()),
+            body=body,
+        )
+        timeline.mark("origin")
+        if not capture.response.renderable:
+            await route.abort()
+            return
+        await route.fulfill(response=response, body=body)
+
+    def on_request_finished(finished: Any) -> None:
+        timing = finished.timing
+        duration = timing["responseEnd"] - timing["requestStart"]
+        if duration >= 0:
+            api.record(
+                urlsplit(finished.url).hostname or "",
+                finished.resource_type,
+                duration,
+            )
+
+    def render_fields() -> dict[str, Any]:
+        return {
+            "asset_cache_hits": stats.hits,
+            "asset_cache_misses": stats.misses,
+            **api.fields(),
+        }
+
     try:
         context, page = await state.browser.acquire()
+        timeline.mark("context")
         try:
-            if state.asset_cache is not None or state.blocked_hosts:
-                await context.route(
-                    "**/*",
-                    RouteHandler(state.asset_cache, state.blocked_hosts, stats),
-                )
-            result = await render(page, settings, url, requested, viewport)
+            await context.route(
+                "**/*",
+                RouteHandler(
+                    state.asset_cache,
+                    state.blocked_hosts,
+                    document=document,
+                    stats=stats,
+                ),
+            )
+            page.on("requestfinished", on_request_finished)
+            result = await render(
+                page, settings, url, requested, viewport, timeline=timeline
+            )
         finally:
             await context.close()
     except RenderTimeout as e:
         state.last_error = str(e)
         return finish(
-            fallback(state, probe, e.partial_html),
+            fallback(state, capture.response, e.partial_html),
             "timeout",
             logging.WARNING,
             error=str(e),
-            asset_cache_hits=stats.hits,
-            asset_cache_misses=stats.misses,
+            **render_fields(),
         )
-    except Exception as e:  # noqa: BLE001 - any renderer failure falls back
+    except Exception as e:  # noqa: BLE001 - every failure has a fallback
+        if capture.response is not None and not capture.response.renderable:
+            # We aborted the navigation on purpose: the origin's answer goes
+            # back to the crawler as it came.
+            return finish(
+                passthrough(state, capture.response),
+                "passthrough",
+                **render_fields(),
+            )
+        if capture.error is not None:
+            state.last_error = f"origin: {capture.error}"
+            return finish(
+                origin_unreachable(capture.error),
+                "error",
+                logging.ERROR,
+                error=f"origin: {capture.error}",
+                **render_fields(),
+            )
         state.last_error = repr(e)
         sentry_sdk.capture_exception(e)
         return finish(
-            fallback(state, probe, None),
+            fallback(state, capture.response, None),
             "error",
             logging.ERROR,
             error=repr(e),
-            asset_cache_hits=stats.hits,
-            asset_cache_misses=stats.misses,
+            **render_fields(),
         )
     finally:
         state.in_flight -= 1
         state.slots.release()
 
     state.renders_total += 1
+    assert capture.response is not None  # a render implies a document
     return finish(
-        rendered_response(state, probe, result),
+        rendered_response(state, capture.response, result),
         "rendered",
-        asset_cache_hits=stats.hits,
-        asset_cache_misses=stats.misses,
+        html_bytes=len(result.html),
+        **render_fields(),
     )

@@ -105,6 +105,18 @@ async def test_query_string_reaches_the_page(
     assert "search=?q=hello" in r.text
 
 
+async def test_origin_renders_the_document_exactly_once(
+    service: str, client: httpx.AsyncClient
+):
+    # The browser's own document request is the one fetch of the origin;
+    # there is no separate probe. A second fetch per render would double
+    # the origin's work for every crawl.
+    before = hits.get("/late/", 0)
+    r = await client.get(f"{service}/late/")
+    assert r.status_code == 200
+    assert hits["/late/"] == before + 1
+
+
 async def test_routing_param_is_stripped_before_the_origin(
     service: str, client: httpx.AsyncClient
 ):
@@ -122,7 +134,7 @@ async def test_blocked_host_is_aborted(service: str, client: httpx.AsyncClient):
     assert "blocked script errored" in r.text
 
 
-async def test_x_robots_tag_copied_from_probe(
+async def test_x_robots_tag_copied_from_origin(
     service: str, client: httpx.AsyncClient
 ):
     r = await client.get(f"{service}/private/")
@@ -237,7 +249,7 @@ async def test_internal_header_is_a_loop_guard(
     assert hits == before
 
 
-async def test_probe_uses_own_ua_header_and_no_crawler_cookies(
+async def test_origin_fetch_uses_own_ua_header_and_no_crawler_cookies(
     service: str, client: httpx.AsyncClient
 ):
     r = await client.get(
@@ -373,4 +385,4 @@ async def test_unreachable_origin_is_a_502_not_a_traceback(
     r = await client.get(f"{svc}/")
     assert r.status_code == 502
     health = (await client.get(f"{svc}/health/")).json()
-    assert health["last_error"].startswith("probe: ")
+    assert health["last_error"].startswith("origin: ")
