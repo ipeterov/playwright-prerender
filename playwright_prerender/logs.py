@@ -86,6 +86,10 @@ class NewRelicHandler(logging.Handler):
         atexit.register(self.close)
 
     def emit(self, record: logging.LogRecord) -> None:
+        if self._closed:
+            # Something ran logging.shutdown() over us but left us attached.
+            # Losing telemetry is fine; raising out of logger.log() is not.
+            return
         data = _record_to_dict(record)
         envelope = {
             "timestamp": data["timestamp"],
@@ -107,9 +111,9 @@ class NewRelicHandler(logging.Handler):
                 sentry_sdk.capture_exception(e)
 
     def close(self) -> None:
+        super().close()  # sets self._closed before the pool goes away
         self.pool.shutdown(wait=True)
         self.client.close()
-        super().close()
 
 
 def configure_logging(settings: Settings) -> None:

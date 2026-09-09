@@ -23,6 +23,11 @@ def main(argv: list[str] | None = None) -> None:
         port=settings.port,
         workers=1,
         access_log=False,
+        # uvicorn's default log config runs logging.config.dictConfig, which
+        # closes every existing handler (shutting down the New Relic
+        # handler's thread pool) while leaving them attached. Skip it; our
+        # handlers stay alive and uvicorn's own messages still print.
+        log_config=None,
     )
 
 
