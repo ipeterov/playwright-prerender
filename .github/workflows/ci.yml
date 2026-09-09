@@ -1,0 +1,35 @@
+name: CI
+
+# Pushes to main run this through release.yml (workflow_call), so a green
+# check is the gate before anything is tagged or pushed to GHCR.
+on:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --locked --dev
+
+      - run: uv run ruff check --output-format=github .
+
+      - run: uv run ruff format --check --diff
+
+      # The flow tests drive a real browser; only Chromium is installed here,
+      # the WebKit/Firefox cases skip themselves when the engine is missing.
+      - run: uv run playwright install --with-deps chromium
+
+      - run: uv run pytest -q

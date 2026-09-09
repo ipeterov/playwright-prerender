@@ -1,0 +1,31 @@
+# Try it in one command:
+#
+#   docker compose -f docker-compose.example.yml up --build
+#
+# Then open http://localhost:8090/dead/ (a 404 that client-side-redirects;
+# stays a 404), http://localhost:8090/late/ (content committed after the
+# ready flag; still captured) or http://localhost:8090/robots.txt (passed
+# through untouched). The stub app itself is on http://localhost:8080/.
+services:
+  app:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.13-slim
+        RUN pip install --no-cache-dir fastapi uvicorn
+        COPY tests/stub_app /stub_app/tests/stub_app
+        WORKDIR /stub_app
+        CMD ["python", "-m", "tests.stub_app", "--port", "8080"]
+    ports:
+      - "8080:8080"
+
+  prerender:
+    build: .
+    environment:
+      ORIGIN: http://app:8080
+      PORT: "8090"
+      CONCURRENCY: "2"
+    ports:
+      - "8090:8090"
+    depends_on:
+      - app

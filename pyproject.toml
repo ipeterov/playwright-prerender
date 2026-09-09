@@ -1,0 +1,81 @@
+[project]
+name = "playwright-prerender"
+version = "0.1.0"
+description = "Self-hosted dynamic rendering for single-page apps: real HTML for crawlers, rendered by Playwright."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Ilia Peterov" }]
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.128.0",
+    "uvicorn>=0.37.0",
+    "httpx>=0.28.1",
+    # Pinned to the Playwright version of the Docker base image
+    # (mcr.microsoft.com/playwright/python:v1.62.0-noble). The image ships
+    # browsers matched to its Playwright release; a different resolution breaks
+    # launch in ways that look like the browser is missing.
+    "playwright==1.62.0",
+    "sentry-sdk>=2.48.0",
+]
+
+[project.urls]
+Repository = "https://github.com/ipeterov/playwright-prerender"
+
+[project.scripts]
+playwright-prerender = "playwright_prerender.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.14.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["playwright_prerender"]
+
+[tool.ruff]
+line-length = 80  # Soft target
+
+[tool.ruff.lint]
+unfixable = ["F401"]
+select = [
+    "E", "W", "F", "ERA", "I", "ASYNC", "S", "BLE", "B", "A", "C4", "DTZ",
+    "T10", "EXE", "ISC", "INP", "PIE", "T20", "LOG", "G", "RSE", "RET", "SLF",
+    "SIM", "SLOT", "TC", "PTH", "C90", "N", "PGH", "PL", "UP", "FURB", "RUF",
+]
+ignore = [
+    "E501",  # don't enforce line length - just try to fit in 80 chars when formatting
+    "G004",  # f-strings are better than clunky logging.basicConfig
+    "PLC0415",  # dynamic imports are ok to avoid circular
+    "PLC0414",  # conflicts with F401 explicit re-export
+    "SIM103",  # I don't like simplifying the last condition with early return pattern
+    "SIM108",  # Ternaries can be less readable - I want to decide myself
+    "S101",  # asserts are totally normal in pytest
+    "PLR0913",  # totally normal in pytest to have lots of args (fixtures)
+    "PLR2004",  # too sensitive to normal magic constants in tests
+    "N818",  # not every exception is an error
+    "C901",
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
+    "TC001",
+    "TC002",
+    "TC003",
+]
+
+[tool.ruff.lint.isort]
+no-lines-before = ["standard-library", "local-folder"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+addopts = ["-v", "--tb=short"]
+testpaths = ["tests"]
+timeout = 120
