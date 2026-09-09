@@ -28,8 +28,9 @@ jobs:
 
       - run: uv run ruff format --check --diff
 
-      # The flow tests drive a real browser; only Chromium is installed here,
-      # the WebKit/Firefox cases skip themselves when the engine is missing.
-      - run: uv run playwright install --with-deps chromium
+      # The flow tests drive real browsers, all three engines. No cache:
+      # Playwright's CI guide says restoring one takes about as long as
+      # downloading the binaries.
+      - run: uv run playwright install --with-deps chromium webkit firefox
 
       - run: uv run pytest -q

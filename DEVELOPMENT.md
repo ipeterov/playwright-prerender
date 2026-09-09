@@ -19,7 +19,7 @@ uv run pytest
 `tests/test_flow.py` starts the stub app (`tests/stub_app`) and the service
 in-process on free ports and drives a real Chromium; the whole suite takes
 about 20 seconds. The WebKit and Firefox cases skip themselves when the
-browser isn't installed.
+browser isn't installed locally; CI installs all three and runs them.
 
 ## Running locally
 
