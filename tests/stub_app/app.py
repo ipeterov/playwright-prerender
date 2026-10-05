@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
@@ -113,6 +115,12 @@ ROUTES: dict[str, str] = {
            root.insertAdjacentHTML('beforeend', '<p>' + innerWidth + 'x' + innerHeight + '</p>');
            setReady(true);""",
     ),
+    "/analytics/": page(
+        "Analytics",
+        """const s = document.createElement('script'); s.src = '/assets/analytics.js';
+           document.head.appendChild(s);
+           root.textContent = 'Tracked page'; setReady(true);""",
+    ),
     "/selector/": page(
         "Selector",
         "setTimeout(() => { root.innerHTML = '<main id=\"ready\">selector content</main>'; }, 50);",
@@ -172,6 +180,18 @@ def private() -> Response:
 def onboarding() -> Response:
     # A page that would take the full TIMEOUT_MS to give up on.
     return HTMLResponse(ROUTES["/never/"], headers={"X-Robots-Tag": "noindex"})
+
+
+@app.get("/assets/analytics.js")
+async def analytics_js() -> Response:
+    # A third-party-style script that is still downloading when the render
+    # finishes and its context closes.
+    await asyncio.sleep(1.5)
+    return Response(
+        "window.__analytics = true;",
+        media_type="application/javascript",
+        headers={"Cache-Control": "public, max-age=600"},
+    )
 
 
 @app.get("/echo-headers/")

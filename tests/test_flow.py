@@ -1,6 +1,7 @@
 """End to end against the stub app: every behaviour in the HTTP contract."""
 
 import asyncio
+import gc
 import time
 
 import httpx
@@ -127,6 +128,21 @@ async def test_routing_param_is_stripped_before_the_origin(
     assert r.status_code == 200
     assert "search=?q=hello" in r.text
     assert "prerender" not in r.text
+
+
+async def test_asset_in_flight_at_close_leaves_no_pending_route(
+    service: str, client: httpx.AsyncClient, caplog
+):
+    # The render finishes and closes its context while a script is still
+    # downloading. Unless the route handler settles that route when the
+    # fetch fails, Playwright's route task stays pending until the GC
+    # destroys it, and asyncio logs it as an error.
+    r = await client.get(f"{service}/analytics/")
+    assert "Tracked page" in r.text
+    await asyncio.sleep(2)  # the script arrives; the fetch has nowhere to go
+    gc.collect()
+    await asyncio.sleep(0.1)
+    assert "Task was destroyed" not in caplog.text
 
 
 async def test_blocked_host_is_aborted(service: str, client: httpx.AsyncClient):

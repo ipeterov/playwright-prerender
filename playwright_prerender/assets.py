@@ -7,6 +7,7 @@ with LRU eviction. Documents are never cached: the point is a fresh page
 every time. The same handler aborts requests to BLOCKED_HOSTS.
 """
 
+import contextlib
 import re
 import time
 from collections import OrderedDict
@@ -115,8 +116,13 @@ class RouteHandler:
             await self._handle(route)
         except PlaywrightError:
             # The render finished and closed its context while this request
-            # was still in flight. Nothing is left to serve it to.
-            return
+            # was still in flight. Nothing is left to serve it to, but the
+            # route must still be settled: Playwright's task for it waits
+            # until it is, and a task left waiting gets garbage-collected
+            # with "Task was destroyed but it is pending!". `fallback` settles
+            # it without talking to the (closed) browser.
+            with contextlib.suppress(PlaywrightError):
+                await route.fallback()
 
     async def _handle(self, route: Any) -> None:
         request = route.request
