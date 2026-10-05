@@ -31,6 +31,10 @@ from .timing import OriginRequests, Timeline
 
 # `none` is shorthand for `noindex, nofollow`.
 _NOINDEX_RE = re.compile(r"\b(noindex|none)\b", re.IGNORECASE)
+# With request interception on, Chromium aborts any navigation whose path
+# ends here before the route handler sees it, so the browser can't even
+# fetch it for passthrough. It is never a page; crawlers ask for it a lot.
+FAVICON_SUFFIX = "/favicon.ico"
 
 
 @dataclass
@@ -284,7 +288,11 @@ async def handle_request(state: State, request: Request) -> Response:
             logging.ERROR,
         )
 
-    if request.method == "HEAD" or not state.path_permitted(path):
+    if (
+        request.method == "HEAD"
+        or not state.path_permitted(path)
+        or path.endswith(FAVICON_SUFFIX)
+    ):
         # No browser involved: a plain fetch, passed through.
         try:
             origin = await state.fetch_origin(request.method, url)

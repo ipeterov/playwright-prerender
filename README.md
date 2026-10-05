@@ -113,8 +113,10 @@ state: if the browser is gone, the process has exited.
    permanent redirects and real 404s correct with no path list anywhere,
    and spares the browser on pages no crawler will keep. Otherwise the browser is handed that same response and
    the render continues — the origin renders the page exactly once per
-   request. (`HEAD` requests, and paths `PATH_ALLOW`/`PATH_DENY` exclude,
-   skip the browser and are fetched and passed through directly.)
+   request. (`HEAD` requests, paths `PATH_ALLOW`/`PATH_DENY` exclude, and
+   paths ending in `/favicon.ico` skip the browser and are fetched and
+   passed through directly. Chromium aborts an intercepted navigation to a
+   favicon before it can be fetched.)
 2. **Render.** Wait per `WAIT_FOR`. Then wait for **DOM quiet**: no
    mutations for `SETTLE_QUIET_MS`, capped at `SETTLE_MAX_MS`. All of it
    inside `TIMEOUT_MS`.

@@ -243,6 +243,18 @@ async def test_real_404_passes_through(service: str, client: httpx.AsyncClient):
     assert "Real 404" in r.text
 
 
+async def test_favicon_passes_through(service: str, client: httpx.AsyncClient):
+    # Chromium aborts an intercepted navigation to any */favicon.ico, so
+    # these never go near the browser.
+    r = await client.get(f"{service}/favicon.ico")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/x-icon"
+    assert r.content.startswith(b"\x00\x00\x01\x00")
+    r = await client.get(f"{service}/docs/favicon.ico")
+    assert r.status_code == 404
+    assert "Real 404" in r.text
+
+
 async def test_head_is_never_rendered(service: str, client: httpx.AsyncClient):
     r = await client.head(f"{service}/")
     assert r.status_code == 200

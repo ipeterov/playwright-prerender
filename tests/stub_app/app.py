@@ -11,6 +11,13 @@ APP_JS = """
 window.__appJsLoaded = (window.__appJsLoaded || 0) + 1;
 """
 
+# A 1x1 ICO, just enough to be an icon.
+FAVICON = bytes.fromhex(
+    "000001000100010100000100200030000000160000002800000001000000"
+    "020000000100200000000000040000000000000000000000000000000000"
+    "00006633ffff00000000"
+)
+
 
 def page(title: str, script: str, *, head: str = "") -> str:
     return f"""<!doctype html>
@@ -131,6 +138,12 @@ def app_css() -> Response:
         media_type="text/css",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@app.get("/favicon.ico")
+def favicon() -> Response:
+    # Chromium never lets an intercepted navigation reach this path.
+    return Response(FAVICON, media_type="image/x-icon")
 
 
 @app.get("/robots.txt")
